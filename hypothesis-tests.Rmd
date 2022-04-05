@@ -1,0 +1,190 @@
+---
+title: "Hypothesis Testing"
+author: "Math 271"
+date: "Spring 2022"
+output: 
+  html_document:
+    css: lab.css
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache=TRUE)
+library(tidyverse)
+library(magrittr)
+library(moderndive)
+```
+
+## [Chapter 9: Hypothesis Testing](https://moderndive.com/9-hypothesis-testing.html){target="_blank"}
+
+Confidence intervals : estimation of an unknown quantity
+
+Hypothesis testing: One framework for making binary decisions based on data. (There are others: see Game Theory/Decision Theory for a broader view of the topic.)
+
+full name: Null Hypothesis Significance Testing
+
+Most appropriate for Man vs Nature type scenario.
+
+Want to decide between two competing explanations for how some data was generated.
+
+More precisely, usually we have one special explanation (called a __null hypothesis__)and want to see if the data "disproves" that explanation.
+
+Decide between:
+
+- Data is consistent with my hypothesis  (__fail to reject the null hypothesis__)
+- Data is inconsistent with my hypothesis (__reject the null hypothesis as not reasonable__)
+
+Using the null hypothesis we must be able to make some specific predictions about what I expect will happen when I observe a data set. (A probability model of some sort.)
+
+Then we compare our actual observed data to the outcomes predicted by the hypothesis and decide if the theory is contradicted or not.
+
+
+
+```{r}
+promotions
+
+promotions %>% count(gender,decision) %>% group_by(gender) %>% mutate(p=proportions(n))
+
+promotions %>% group_by(gender) %>% summarize(promoted=mean(decision=="promoted"))
+
+# This code computes the difference between the two groups (gender) based on their status (promoted/not)
+
+promotions %>% 
+  group_by(gender) %>% 
+  summarize(promoted=mean(decision=="promoted")) %>% 
+  summarize(p_diff=diff(promoted)) # does female - male
+
+
+```
+
+p_diff = -0.29 meaning that women were 30% less likely to be promoted
+
+In a real life situation we establish innocence and seek to disprove that innocence (develop a hypothesis):
+
+Hypothesize: There is no gender discrimination, males and females are equally likely to be hired/promoted. _the null hypothesis_ (aka: `gender` and the `promoted` variables have no relationship to each other (call this independence technically.))
+
+Next step is: make some predictions about the behavior of `p_diff` if the null hypothesis is true.
+
+`sample()` - column based version of `slice_sample()` 
+
+The code chunk below takes in the decision column and shuffles (permutes) it which in turn breaks the relationship between gender and promotion (independence).
+```{r}
+promotions %>% mutate(decision=sample(decision))
+
+get_p_diff <- . %>% group_by(gender) %>% 
+  summarize(promoted=mean(decision=="promoted")) %>% 
+  summarize(p_diff=diff(promoted))
+
+# below we are running the shuffled data through the code that computes the difference between the two groups (gender) based on their status (promoted/not):
+
+promotions %>% get_p_diff
+promotions %>% mutate(decision=sample(decision)) %>% get_p_diff
+
+# we now want to get an understanding of how 'diff_p' interacts with a large data set, we do this by rerunning it 2000 times:
+permute_p_diffs <- rerun(2000, promotions %>% mutate(decision=sample(decision)) %>% get_p_diff) %>% bind_rows()
+
+# developing a visualization of how p_diff responds to sampling when columns are independent 
+# sampling distribution for diff_p _assuming the null is true_.
+permute_p_diffs
+ggplot(permute_p_diffs) + aes(x=p_diff) + geom_histogram(binwidth=1/12) +
+  geom_vline(xintercept=-0.291666, col="red")
+```
+
+The next step for us to take is to bring in our actual data set and assess it's relationship to the resampled (permuted) data. Our results (red line found on histogram) indicate that our actual data isn't totally unreasonable. 
+
+If we're trying to prove that discrimination against women exists within the workplace, we would be looking toward the negative values (left side) of the histogram. For males, we look toward the positive values (right side).
+
+## Acceptance and Rejection Regions
+
+- Which parts of the sampling distribution support the alternative hypothesis?
+- Use `quantile` to identify a cutoff(s) to separate the histogram into two regions
+    + __Rejection region__ parts of the histogram which are more compatible with the alternative hypothesis than the null hypothesis.
+    + __Acceptance region__ everything else 
+
+Alternative hypothesis: Women are discriminated against. -> Negative values of p_diff.
+
+Left side of the histogram is evidence for the alternative hypothesis, everything else is the acceptance region; where you continue to accept (fail to reject?) the null hypothesis. 
+Confidence level -> (1 - Significance level).
+The usual value for confidence levels are 95%. The corresponding "thing" in a hypothesis test would be a 5% or 0.05 significance level. It is the reverse of the confidence level. 
+
+```{r}
+permute_p_diffs
+
+permute_p_diffs %>% summarise(crit_value=quantile(p_diff, 0.05)) #Looking off the cutoff for the bottom 5%.
+
+permute_p_diffs <- permute_p_diffs %>% mutate(reject = p_diff < -0.208333) 
+
+
+ggplot(permute_p_diffs) + aes(x=p_diff, fill=reject) + geom_histogram(binwidth=1/12) + geom_vline(xintercept=-0.291666, col="red")
+```
+
+The previous table, FALSE means you are on the right side of the significance level, consequently, TRUE means that you are on the left side. In the histogram, this is shown in Red as the acceptance region & Blue as the rejection region. 
+
+If the null hypothesis is true we would consider this data set to be unusual, so we would reject the null hypothesis, and accept the alternative hypothesis. Based on this we can conclude that it is more likely that discrimination occurred in the creation of these data. 
+
+## What if I wanted to identify any sort of discrimination (against men or women)
+
+Very positive values would be discrimination against men while very negative values would be discrimination against women. 
+
+```{r}
+ci_probs <- . %>% multiply_by(c(-1,1)) %>% add(1) %>% divide_by(2)
+
+permute_p_diffs %>% summarise(p=ci_probs(0.95), crit_value=quantile(p_diff, p))
+
+
+permute_p_diffs <- permute_p_diffs %>% mutate(reject = !between(p_diff, -0.208333, 0.2083333)) 
+
+ggplot(permute_p_diffs) + aes(x=p_diff, fill=reject) + geom_histogram(binwidth=1/12) + geom_vline(xintercept=-0.291666, col="red")
+```
+
+
+
+## P-Values
+
+
+One way to decide if this is unusual or not is to compute the proportion of the histogram which is _"more unusual" than our actual observation_.
+
+```{r}
+permute_p_diffs %>% summarize(more_unusual=mean(p_diff < -0.2916667))
+
+ci_probs <- . %>% multiply_by(c(-1,1)) %>% add(1) %>% divide_by(2)
+
+## This is the range of "reasonable values" for the proportion differences under the null hypothesis.
+## "reasonable" means 95% of the time
+
+permute_p_diffs %>% summarize(p=ci_probs(0.95), quantile(p_diff, p))
+
+```
+
+The value 0.006 indicates that the value we saw in the actual dataset (-.29) is something that occurs less that 1% of the time when no relationship is assumed.
+
+This positions us to make a judgment based on the findings. Do the above findings provide enough compelling evidence to suggest that gender discrimination does exist within the bank's workplace? That is our decision to make. Randomness is a potential explanation for the findings, but there is very small chance of that.
+
+## Types of Error
+
+
+```{r, eval=F, include=F}
+promotions
+promotions %>% group_by(gender) %>% summarize(promoted=mean(decision =="promoted"))
+ggplot(promotions) + aes(x=gender,fill=decision) + geom_bar()
+
+promotions %>% mutate(decision=sample(decision))
+permute_decisions <- . %>% mutate(decision=sample(decision))
+ggplot(promotions) + aes(x=gender,fill=decision) + geom_bar(data=permute_decisions)
+
+promotions %>% 
+  group_by(gender) %>% 
+  summarize(promoted=mean(decision=="promoted")) %>% 
+  summarize(diff_p=diff(promoted))
+
+get_p_diff <- . %>% group_by(gender) %>% summarize(promoted=mean(decision=="promoted")) %>% summarize(diff_p=diff(promoted))
+
+promotions %>% get_p_diff
+promotions %>% permute_decisions %>% get_p_diff
+
+permute_diffs <- rerun(1000, promotions %>% permute_decisions %>% get_p_diff) %>% bind_rows
+ggplot(permute_diffs) + 
+  aes(x=diff_p) + 
+  geom_histogram(binwidth = 1/12) + 
+  geom_vline(xintercept=get_p_diff(promotions)$diff_p,)
+```
+
