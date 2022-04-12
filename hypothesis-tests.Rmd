@@ -12,6 +12,7 @@ knitr::opts_chunk$set(echo = TRUE, cache=TRUE)
 library(tidyverse)
 library(magrittr)
 library(moderndive)
+set.seed(42)
 ```
 
 ## [Chapter 9: Hypothesis Testing](https://moderndive.com/9-hypothesis-testing.html){target="_blank"}
@@ -111,7 +112,7 @@ permute_p_diffs
 
 permute_p_diffs %>% summarise(crit_value=quantile(p_diff, 0.05)) #Looking off the cutoff for the bottom 5%.
 
-permute_p_diffs <- permute_p_diffs %>% mutate(reject = p_diff < -0.208333) 
+permute_p_diffs <- permute_p_diffs %>% mutate(reject = p_diff < -0.208) 
 
 
 ggplot(permute_p_diffs) + aes(x=p_diff, fill=reject) + geom_histogram(binwidth=1/12) + geom_vline(xintercept=-0.291666, col="red")
@@ -123,17 +124,19 @@ If the null hypothesis is true we would consider this data set to be unusual, so
 
 ## What if I wanted to identify any sort of discrimination (against men or women)
 
-Very positive values would be discrimination against men while very negative values would be discrimination against women. 
+Very positive values would be discrimination against men while very negative values would be discrimination against women. So there should be rejection regions in both tails of the sampling distribution. We'll use the same approach as confidence intervals, to look up critical cutoff values on both sides of the distribution.
 
 ```{r}
 ci_probs <- . %>% multiply_by(c(-1,1)) %>% add(1) %>% divide_by(2)
 
-permute_p_diffs %>% summarise(p=ci_probs(0.95), crit_value=quantile(p_diff, p))
+
+crit_vals <- permute_p_diffs %>% summarise(p=ci_probs(0.95), crit_value=quantile(p_diff, p)) %>% print
 
 
-permute_p_diffs <- permute_p_diffs %>% mutate(reject = !between(p_diff, -0.208333, 0.2083333)) 
+permute_p_diffs <- permute_p_diffs %>% 
+  mutate(reject = ! between(p_diff, crit_vals$crit_value[1], crit_vals$crit_value[2]) ) 
 
-ggplot(permute_p_diffs) + aes(x=p_diff, fill=reject) + geom_histogram(binwidth=1/12) + geom_vline(xintercept=-0.291666, col="red")
+ggplot(permute_p_diffs) + aes(x=p_diff, fill=reject) + geom_histogram(binwidth=1/12,center=0) + geom_vline(xintercept=-0.291666, col="red") + scale_x_continuous(breaks = seq(-0.55,0.55,by=0.1)) + geom_rug()
 ```
 
 
@@ -144,14 +147,11 @@ ggplot(permute_p_diffs) + aes(x=p_diff, fill=reject) + geom_histogram(binwidth=1
 One way to decide if this is unusual or not is to compute the proportion of the histogram which is _"more unusual" than our actual observation_.
 
 ```{r}
-permute_p_diffs %>% summarize(more_unusual=mean(p_diff < -0.2916667))
+permute_p_diffs %>% summarize(more_unusual=mean(p_diff <= -0.2916)) ## one-sided disc against women test
 
-ci_probs <- . %>% multiply_by(c(-1,1)) %>% add(1) %>% divide_by(2)
-
-## This is the range of "reasonable values" for the proportion differences under the null hypothesis.
-## "reasonable" means 95% of the time
-
-permute_p_diffs %>% summarize(p=ci_probs(0.95), quantile(p_diff, p))
+## to equivalent methods of getting a two-sided p-value
+permute_p_diffs %>% summarize(p_value= mean(!between(p_diff, -0.2916, 0.2916) ))
+permute_p_diffs %>% summarize(p_value= mean(abs(p_diff) > abs(-0.2916)))
 
 ```
 
@@ -160,6 +160,164 @@ The value 0.006 indicates that the value we saw in the actual dataset (-.29) is 
 This positions us to make a judgment based on the findings. Do the above findings provide enough compelling evidence to suggest that gender discrimination does exist within the bank's workplace? That is our decision to make. Randomness is a potential explanation for the findings, but there is very small chance of that.
 
 ## Types of Error
+
+
+- Type I Error: Rejection of a true null hypothesis. (False positive. Convict innocent defendant.)
+- Type II Error: Acceptance of a false null hypothesis. (False negative. Acquit guilty defendant.)
+
+The __significance level__ $\alpha$ for a hypothesis test represents an upper limit on the chance that Type I Error will occur. Note that this assumes the null hypothesis is true, and is based only on this assumption. $\alpha$ is the chance that the sampling process will produce an "unusual result". 
+
+The chance of committing a Type II Error is usually denoted $\beta$. To compute this number one needs to make an assumption not only about the null hypothesis, but also a specific alternative hypothesis. It represents the chance that a sample drawn from the alternative hypothesis will produce a non-rejecting test statistic. The converse $1-\beta$ is the chance of correctly rejecting, and is called the __statistical power__ of the test to detect the alternative hypothesis.
+
+
+
+## Testing a mean
+
+This time we will compare IMDB ratings for movie genres, Action and Romance. The null hypothesis will be that there is no relationship between genre and the mean rating.
+
+- Null hypothesis: mean romance rating = mean action rating $$\mu_r - \mu_a = 0$$
+- Alternative: they are not the same $$\mu_r - \mu_a \neq 0$$
+
+```{r}
+movies_sample
+ggplot(movies_sample) + aes(y=rating, x=genre) + geom_boxplot()
+
+## observed statisic value
+movies_sample %>% group_by(genre) %>% summarize(xbar=mean(rating)) %>% summarize(xbar_diff=diff(xbar))
+```
+
+
+```{r}
+## statistic computing pipeline (input data set, output xbar_diff value)
+xbar_diff_stat <- . %>% 
+  group_by(genre) %>% 
+  summarize(xbar=mean(rating)) %>%
+  summarize(xbar_diff=diff(xbar))
+
+observed_xbar_diff <- movies_sample %>% xbar_diff_stat
+
+## generating a statistic under null hypothesis (no relationship between rating and genre)
+movies_sample %>% mutate(rating=sample(rating)) %>% xbar_diff_stat
+
+## Permuting removes any possible relationship between rating and genere.
+## redo this many times to estimate the distribution under the null
+
+movies_permuted <- rerun(2000, movies_sample %>% mutate(rating=sample(rating)) %>% xbar_diff_stat) %>% bind_rows
+
+ggplot(movies_permuted) + aes(x=xbar_diff) + geom_histogram() + geom_vline(xintercept=1.047222, col="red")
+
+## cutoff values for the acceptance/rejection regions of a two-sided test with alpha=0.05
+movies_permuted %>% summarize(p=ci_probs(0.95), crit_vals=quantile(xbar_diff, p))
+
+
+## two sided p-value is the proportion of permuted samples where xbar_diff is more extreme than the 
+## original data
+movies_permuted %>% summarize(p_value=mean(abs(xbar_diff) >= abs(1.047222)))
+```
+
+## Inference for regression problems
+
+Consider the simple linear regression problem:
+
+> Given a collection of $(x,y)$ values, find the coefficient pair $(a,b)$ that produces the "best fit" prediction equation $\hat y = a + bx$.
+
+```{r}
+evals_ch5 <- evals %>%
+  select(ID, score, bty_avg, age)
+glimpse(evals_ch5)
+
+ggplot(evals_ch5) + aes(x=bty_avg, y=score) + geom_jitter(alpha=0.3) + geom_smooth(method="lm", fullrange=TRUE) + xlim(0,9)
+
+lm(score~bty_avg, data=evals_ch5)
+```
+
+In this case, we are using the beauty score (bty_avg) to compute teaching score (score).
+
+What is the idea of simple linear regression?
+The basis of linear regression is to find a line of best fit for our data. From a mathematical point of view, we want to find the slope and intercept value that gives you the equation for the best fitting line. The line of best fit should minimize residuals.
+
+
+
+Our overall plan will be to:
+
+- Compute the coefficients for the data set we have
+- Use bootstrapping/permuting to investigate the effect of sampling variability on the coefficients
+- Visualize and interpret the sampling distributions to make inferences about the true values of the coefficients.
+
+We first produce a pipeline that will compute the coefficients for us
+
+```{r}
+lm(score~bty_avg, data=evals_ch5)
+
+evals_ch5 %>% lm(score~bty_avg, .) %>% coef() %>% t %>% as_tibble %>% rename(intercept="(Intercept)")
+
+lm_coef_stat <- . %>% lm(score~bty_avg, .) %>% 
+  coef() %>% t %>% as_tibble %>% 
+  rename(intercept="(Intercept)")
+
+evals_ch5 %>% lm_coef_stat()
+```
+
+First, we turn the linear model function into a pipeline which will compute the coefficients for us. You cannot directly pipe a formula into the `lm()` function. `lm()` doesn't work like the rest of the tidyverse functions, it likes the data to be the second argument in the function. By using the placeholder ".", we can tell the pipe where to place the incoming data. Then we can use `coef()` or `coefficients()` (depending on how much you like abbreviation) to pull out only the coefficient values from the linear model object generated by `lm()`. Finally, to turn our coefficients into an object which we can use with other tidyverse functions using either `enframe()` or a combination of `t()` (Which transposes data) and `as_tibble()`. The result is a two column data frame with the column name defining which coefficient is in the row.   
+
+
+
+```{r}
+lm_coef_stat <- . %>% lm(score~bty_avg, data=.) %>% coef %>% t %>% as_tibble %>% rename(intercept="(Intercept)")
+evals_ch5 %>% lm_coef_stat
+
+```
+
+
+### Confidence Intervals
+
+```{r}
+evals_ch5 %>% slice_sample(prop=1, replace = TRUE) %>% lm_coef_stat()
+
+evals_bootstrap <- rerun(2000, evals_ch5 %>% slice_sample(prop=1, replace = TRUE) %>% lm_coef_stat()) %>% bind_rows()
+
+evals_bootstrap
+
+ggplot(evals_bootstrap) + aes(x=intercept) + geom_histogram()
+ggplot(evals_bootstrap) + aes(x=bty_avg) + geom_histogram()
+
+```
+
+We bootstrap the sample, which means we get a new set of coefficients for each bootstrapped sample. Then we rerun the bootstrapping a bunch of times to determine how the coefficients' variability change with the sampling process taken into account. Comparing the values we get from bootstrapping the coefficients to the plot we created in line 229, the confidence band surrounding our line of best fit matches up with the range of intercepts. While our best estimate is shown as the blue line, we can be 95% confident that the line of best fit falls within this confidence band.   
+
+```{r}
+#Calculating the critical values for our data
+evals_bootstrap %>% summarize(p=ci_probs(0.95), 
+                              crit_vals_icept=quantile(intercept, p), 
+                              crit_vals_slope=quantile(bty_avg,p))
+
+lm(score~bty_avg, data=evals_ch5) %>% confint
+```
+
+Formally, we can interpret this result as:
+"We can be 95% that the intercept of the real regression line is between 3.72 and 4.02"
+
+The `confint` function will take an `lm` object and apply probability theory math to compute the same thing we computed when we bootstrapped our sample a bunch. In practice, most people will use the theory based method but being able to use two different methods and return the same result, you can be more confident in your answer.
+
+```{r}
+ggplot(evals_bootstrap) + aes(x=intercept, y=bty_avg) + geom_point() + geom_vline(xintercept=c(3.7,4.1), col="red") + geom_hline(yintercept=c(0.033,0.099), col="blue")
+```
+
+Together, how does our intercept and slope vary as computed by one data set.
+The confidence interval, just by looking at the intercept, can be seen here as the red lines, and the CI, computed just by looking at the beta coefficient can be seen as the blue lines. By using both, you could compute a confidence oval, which combines the CI computed both variables to create a more complex confidence object.
+
+```{r}
+ggplot(evals_ch5) + aes(x=bty_avg, y=score) + geom_point() + 
+  geom_abline(aes(intercept=intercept, slope=bty_avg), data=evals_bootstrap %>% slice_sample(n=100), alpha=0.1) 
+  
+```
+
+A large intercept tends to have a small slope value, and vice versa. Visually, if our intercept is higher on the y-axis it will tend to be flatter to go through all the points. 
+
+### Hypothesis Tests
+
+- Null: No relationship between variables: slope is zero 
+- Alternative: there is a relationship: slope is not zero
 
 
 ```{r, eval=F, include=F}
