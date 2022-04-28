@@ -304,14 +304,361 @@ The confidence interval, just by looking at the intercept, can be seen here as t
 ggplot(evals_ch5) + aes(x=bty_avg, y=score) + geom_point() + 
   geom_abline(aes(intercept=intercept, slope=bty_avg), 
               data=evals_bootstrap %>% slice_sample(n=100), 
-              alpha=0.1) 
+              alpha=0.1) + 
+  geom_abline(col="red", intercept=3.729830, slope=0.03359138)
   
 ```
 
 A large intercept tends to have a small slope value, and vice versa. Visually, if our intercept is higher on the y-axis it will tend to be flatter to go through all the points. 
 
+```{r}
+evals_ch5 %>% slice_sample(prop=1, replace = TRUE) %>% lm_coef_stat()
+
+observed_model <- lm(score~bty_avg, data=evals_ch5)
+
+## resample the residuals only (not the whole row)
+evals_ch5 %>% mutate(yhat=predict(observed_model), 
+                     resid=residuals(observed_model),
+                     score=yhat + sample(resid)) %>% lm_coef_stat()
+
+boot_residuals <- . %>% mutate(yhat=predict(observed_model), 
+                     resid=residuals(observed_model),
+                     score=yhat + sample(resid, replace = TRUE))
+
+boot_resid_coefs <- rerun(2000, evals_ch5 %>% boot_residuals %>% lm_coef_stat) %>%
+  bind_rows
+ggplot(evals_ch5) + aes(x=bty_avg, y=score) + geom_point() + 
+  geom_abline(aes(intercept=intercept, slope=bty_avg), 
+              data=boot_resid_coefs %>% slice_sample(n=100), 
+              alpha=0.1) 
+
+boot_resid_coefs %>% summarize(p=ci_probs(0.95), 
+                              crit_vals_icept=quantile(intercept, p), 
+                              crit_vals_slope=quantile(bty_avg,p))
+observed_model %>% confint()
+```
+
+
 ### Hypothesis Tests
 
 - Null: No relationship between variables: slope is zero 
-- Alternative: there is a relationship: slope is not zero
+- Alternative: there is a relationship: slope is not zero (provided the relationship is linear)
+
+How can we simulate the null hypothesis. What can we do to the data to make that hypothesis true?
+
+```{r}
+evals_ch5
+lm(score~bty_avg, evals_ch5)
+
+evals_ch5 %>% mutate(score=sample(score))
+
+ggplot(evals_ch5 %>% mutate(score=sample(score))) + aes(bty_avg, score) + geom_point() + geom_smooth(method="lm")
+
+evals_ch5 %>% mutate(score=sample(score)) %>% lm_coef_stat
+
+null_permute <- rerun(2000, evals_ch5 %>% mutate(score=sample(score)) %>% lm_coef_stat) %>%
+  bind_rows()
+
+#null_permute
+
+ggplot(null_permute) + aes(bty_avg) + geom_histogram()
+
+null_permute %>% summarize(p=ci_probs(0.95), crit_slope=quantile(bty_avg, p))
+
+null_permute <- null_permute %>% mutate(reject= !between(bty_avg, 
+                                         quantile(bty_avg,0.025), 
+                                         quantile(bty_avg, 0.975)))
+
+ggplot(null_permute) + aes(bty_avg, fill=reject) + geom_histogram() +
+  geom_vline(xintercept=0.0666, color="red")
+
+```
+
+
+Our observed statistic is in the rejection region: conclude that the true slope value is non-zero.
+
+To make a p-value: "What proportion of the sampling distribution is more "extreme" than the observed statistic?"
+```{r}
+null_permute %>% mutate(more_extreme= abs(bty_avg) > abs(0.06664)) %>%
+  summarize(p_val=mean(more_extreme))
+
+```
+In our simulations this never occurred in 2000 attempts. It's not really zero, but I can say it's probably not bigger than say 1/2000 or so.
+
+## Conditions for inference on regression
+
+- __L__inear relationship: $\hat y = a + b\cdot x + c\cdot x^2$ or more generally $\hat y = \sum_{i=1}^k b_i\cdot x_i$.
+- __I__independence of observations (technically, the residuals)
+- __N__ormality of residuals
+- __E__qual variance of all residuals
+
+1. To check linearity, investigate the __predictions vs residuals__. For non-linear relationships there will often be a curved pattern.
+2. Checking independence requires __thought about the data collection__ processes.
+3. To check normality, make a __histogram of the residuals__.
+4. To check equal variance (homoskedasticity if we're feeling fancy), look again at the __predictions vs resdiuals__. This time we're looking to see if there is a pattern in the variability of the dots.
+
+
+```{r}
+observed_model <- lm(score~bty_avg, evals_ch5)
+fortified_evals <- evals_ch5 %>% 
+  mutate(yhat=predict(observed_model), resid= resid(observed_model))
+ggplot(fortified_evals) +  aes(x=yhat, y=resid) + geom_point() + geom_smooth()
+
+ggplot(fortified_evals) + aes(x=resid) + geom_histogram() ## not really normal (left-skew)
+
+```
+
+## Testing equal means for multiple groups
+
+In the _Testing a mean_ section above, we used the statistic $\bar x_1 - \bar x_2$ (difference of sample means) to explore whether two groups had the same average value for a response variable. This statistic seems to be the obvious choice when comparing two groups, but what if there are more than two groups? 
+
+As in the two group case, the research question is often: __Does the grouping variable have any relationship to the response variable?__ With more than two groups, this becomes:
+
+- null hypothesis: There is no relationship between the variables, the group means are __all equal to some common value__ ($\mu_1 = \mu_2 = \mu_3 =\ldots$)
+- alternative hypothesis: There is some relationship between the two variables: __at least one pair of group means are different__.
+
+The usual method used with this question is called ANOVA (ANalysis Of VAriance), the idea is based on a partitioning of quantities known as _Sums of Squares_.
+
+### Sums of Squares, Variance, Standard deviation
+
+Drawings for this section: https://geogebra.org/notes/m82na63q
+
+The _Sum of Squares_ of a list of numbers is exactly what it sounds like. 
+
+```{r}
+iris %$% sum(Sepal.Length^2)
+```
+
+```{r}
+squares_plot <- ggplot(iris %>% slice_sample(n=10)) + aes(x=Sepal.Length, y=Sepal.Length) + 
+  geom_point()
+squares_plot + 
+  geom_rect(aes(xmin=0,ymin=0, xmax=Sepal.Length, ymax=Sepal.Length), alpha=0.1,fill=1:10) + 
+  theme(aspect.ratio = 1) + 
+  labs(title="Squares for Sepal.Length")
+```
+
+
+The _degrees of freedom_ of a list of numbers is, _informally_, tells you how many of the numbers in the list are free to change. For a list of independent data, the degrees of freedom is the same as the sample size.
+
+```{r}
+length(iris$Sepal.Length)
+```
+
+Conversely, suppose we run a very simple model, where we include only the intercept column in the model. The predictions are then all the same value, equal to the sample mean. This predictions vector has only one degree of freedom, matching the one column in the model matrix.
+
+```{r}
+iris %$% mean(Sepal.Length)
+icept_only <- lm(Sepal.Length~1, iris)
+icept_only %>% predict %>% unname
+```
+
+The residuals from the intercept-only model have $n-1$ degrees of freedom. A basic property of these residuals is that they must sum to zero, therefore if $n-1$ of the values are known, the last one is no longer free to change.
+```{r}
+icept_only %>% residuals
+icept_only %>% residuals %>% sum ## not exactly zero due to small rounding errors
+```
+
+The core idea of ANOVA, is that the Total Sum of Squares for a response variable can be partitioned into a Sum of Squares from the predictions, plus the Sum of Squares from the residuals. 
+
+```{r}
+## The sum of squares partitioned into two parts: predictions + residuals
+sum(predict(icept_only)^2) 
+sum(residuals(icept_only)^2)
+sum(predict(icept_only)^2) + sum(residuals(icept_only)^2)
+
+iris %$% sum(Sepal.Length^2) ## Total Sum of Squares
+```
+
+```{r}
+iris %>% summarize(mean(Sepal.Length))
+
+squares_plot + geom_vline(xintercept=5.843) + geom_hline(yintercept=5.843) + 
+  geom_rect(aes(xmin=5.843,ymin=5.843, 
+                xmax=0, ymax=0), alpha=0.1,fill=1:10) + 
+  theme(aspect.ratio = 1) +
+  labs(title="Squares for predictions", subtitle="there is one square for each point") 
+
+
+squares_plot + geom_vline(xintercept=5.843) + geom_hline(yintercept=5.843) +
+  geom_rect(aes(xmin=5.843,ymin=5.843, 
+                xmax=Sepal.Length, ymax=Sepal.Length), alpha=0.1,fill=1:10) + 
+  theme(aspect.ratio = 1) + xlim(0,NA) + ylim(0,NA) +
+  labs(title="Squares for residuals") 
+```
+
+
+Similarly, the total degrees of freedom in the response can be partitioned into predictions and residual freedom: $149 + 1 = 150$
+
+#### Mean squares 
+
+A _mean square_ is a sum of squares divided by its associated degree of freedom.
+
+You may be familiar already with one particular mean square: the mean square of residual distances from the overall sample average. This quantity has a special name: The _variance_.
+
+```{r}
+## all these compute the same value
+iris %$% sum((Sepal.Length - mean(Sepal.Length))^2) %>% divide_by(149)
+sum(residuals(icept_only)^2) / (nrow(iris) - 1)
+var(iris$Sepal.Length)
+```
+
+Note how the quantities we have just discussed all appear in the `anova()` table for the intercept-only linear model.
+
+```{r}
+anova(icept_only)
+```
+
+#### Standard Deviation
+
+We won't use this, but note that the square root of the variance is called the _standard deviation_.
+
+```{r}
+sqrt(var(iris$Sepal.Length)) == sd(iris$Sepal.Length)
+```
+
+### The F-Statsitic
+
+The basic statistic we wish to calculate is the _mean square for the predictions_ divided by the _mean square for the residuals_, which we call an _F-statistic_.
+
+```{r}
+msp <- sum(predict(icept_only)^2) / (1)
+msr <- sum(residuals(icept_only)^2) / (nrow(iris) - 1)
+msp/msr
+```
+
+If you are familiar with the $t$-test, this $F$-statistic is closely related to the $t$-value, in this case it is exactly the value $t^2$ when testing the hypothesis that the mean is zero.
+```{r}
+iris %$% t.test(Sepal.Length)
+
+t.test(iris$Sepal.Length)$statistic^2
+
+```
+
+Note that I can get all of the numbers we've discussed by fitting a model with no predictors at all, and passing that and the intercept-only model to the `anova` function.
+
+```{r}
+iris %>% {anova(lm(Sepal.Length~0, .), 
+                lm(Sepal.Length~1, .))}
+```
+- Model 1 has no predictors at all, and all of the SS and Df are in the residuals, showing the total sum of squares.
+- Model 2 has only the intercept, this puts 1 Df into the prediction SS, leaving 149 for the residuals. We see the familiar prediction and residual sums of squres for this model, and R has also computed the F ratio.
+
+#### Comparing group means
+
+Now, we turn to our real problem: Comparing the means of 3 groups. We will add a third model to our `anova()` call, one that includes the `Species` categorical predictor (3 categories). 
+
+
+```{r}
+
+iris %>% lm(Sepal.Length ~ Species, .) %>% predict %>% unname
+## this prediction vector has three degrees of freedom
+iris %>% lm(Sepal.Length ~ Species, .) 
+
+iris %>% lm(Sepal.Length ~ Species, .) %>% model.matrix
+
+iris %>% lm(Sepal.Length ~ Species, .) %>% residuals %>% unname
+## has 150 - 3 = 147 degrees of freedom in residuals
+## 
+```
+
+
+
+```{r}
+iris %>% {anova(lm(Sepal.Length~0, .), 
+                lm(Sepal.Length~1, .),
+                lm(Sepal.Length~1+Species, .))} %>%
+  print(digits=6)
+```
+
+Lines for models 1 and 2 have the same Df and SS values. Focus on line 3. We see that in our model with the three categories, the residual SS has decreased from 102.2 to 39.0: The difference in these Residual SS values, 63.2, is what appears in the SS column for model 3.
+
+So in this ANOVA table, the `Sum of Squares` column is telling you: _This much of the total sum of squares is transferred from the residuals to the predictions when adding this term to the model._ Aka the amount of the prediction SS that can be attributed to that model term.
+
+Of the total sum of squares of the response variable, `5223.9` we can partition this into 
+
+- 5121.7 that comes from allowing an overall mean term in the model (one intercept column)
+- 63.2 that comes from allowing the three groups to have different means (two species indicator columns)
+- 39.0 remaining SS in the residuals (with 150 - 1 - 2 = 147 degrees of freedom remaining)
+
+```{r}
+species_model_predictions <- lm(Sepal.Length~1+Species, iris) %>% predict(newdata=squares_plot$data)
+
+squares_plot + aes(color=Species) +
+  geom_vline(xintercept=5.843) + 
+  geom_hline(yintercept=5.843) +
+  geom_rect(aes(xmin=5.843,ymin=5.843, 
+                xmax=species_model_predictions,
+                ymax=species_model_predictions), 
+            alpha=0.1, fill=1:10) + 
+  theme(aspect.ratio = 1) + xlim(0,NA) + ylim(0,NA) +
+  labs(title="Squares for group means") 
+
+squares_plot + aes(color=Species) + 
+  geom_vline(xintercept=species_model_predictions) + 
+  geom_hline(yintercept=species_model_predictions) +
+  geom_rect(aes(xmin=Sepal.Length,ymin=Sepal.Length, 
+                xmax=species_model_predictions,
+                ymax=species_model_predictions), 
+            alpha=0.1, fill=1:10) + 
+  theme(aspect.ratio = 1) + xlim(0,NA) + ylim(0,NA) +
+  labs(title="Squares for residuals", subtitle="from group means") 
+
+```
+
+The F values are now comparing the Mean Square for each term to the Mean Square for residuals in the bottom model.
+
+```{r}
+(5121.68/1) / (38.956 / 147) ## intercept row F value
+(63.2121/2) / (38.956 / 147) ## Species row F value
+```
+If adding Species to the model improves the predictions greatly, then it will transfer a large amount of the total SS into the model and away from the residuals. So a large F ratio is evidence that the means are all different, while a small F ratio is evidence that the means are all the same.
+
+Let's permute the species and come up with an idea of the sampling distribution of F under the null hypothesis.
+
+
+```{r}
+iris %>% lm(Sepal.Length~Species, .) %>% 
+  {anova(.)["Species", "F value"]} %>%
+  tibble(F=.)
+
+species_F_stat <- . %>% lm(Sepal.Length~Species, .) %>% 
+  {anova(.)["Species", "F value"]} %>% 
+  tibble(F=.)
+
+iris %>% species_F_stat()
+iris %>% mutate(Species=sample(Species)) %>% species_F_stat()
+iris_species_permute <- rerun(2000, iris %>% mutate(Species=sample(Species)) %>% species_F_stat()) %>% bind_rows()
+
+iris_species_permute
+```
+
+```{r}
+ggplot(iris_species_permute) + aes(x=F) + 
+  geom_histogram(aes(y=..density..), boundary=0) + 
+  geom_vline(xintercept = quantile(iris_species_permute$F, 0.95), col="red") + 
+  geom_function(fun=. %>% df(.,2,147)) + # the F-distribution with parameters 2 and 147
+  geom_vline(xintercept=qf(0.95, 2, 147), col="blue", linetype=2) # We can get the critical value from probability theory 
+  
+```
+
+The p-values in the anova table are computed by looking up a theory-based probability from the F-distribution with `Df` and `Res.Df` parameters.
+
+### Regression with numerical + categorical predictors
+
+
+```{r}
+intercept_only <- lm(Sepal.Length ~ 1, iris)
+no_species <- update(intercept_only, ~ . + Sepal.Width)
+parallel_slopes <- update(no_species, ~ . + Species)
+with_interactions <- update(parallel_slopes, ~ . + Species:Sepal.Width)
+
+iris_plot <- ggplot(iris) + aes(x=Sepal.Width, y=Sepal.Length, color=Species) + geom_point() 
+iris_plot + geom_line(aes(y=predict(intercept_only), color=NULL))
+iris_plot + geom_line(aes(y=predict(no_species), color=NULL))
+iris_plot + geom_line(aes(y=predict(parallel_slopes)))
+iris_plot + geom_line(aes(y=predict(with_interactions)))
+
+anova(with_interactions)
+```
 
