@@ -690,6 +690,10 @@ iris %>% mutate(Sepal.Length = predict(parallel_slopes) + sample(residuals(paral
 
 interaction_f_null <- rerun(2000, iris %>% mutate(Sepal.Length = predict(parallel_slopes) + sample(residuals(parallel_slopes))) %>% lm(Sepal.Length~Species*Sepal.Width, .) %>% {anova(.)[3,"F value"]} %>% tibble(F=.)) %>% bind_rows()
 
+ggplot(interaction_f_null) + aes(x=F) + geom_histogram(boundary=0) + geom_vline(xintercept=0.406, col="red")
+
+interaction_f_null %>% summarize(p_value=mean(F>0.406))
+
 ```
 
 
