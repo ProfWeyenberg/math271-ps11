@@ -538,6 +538,7 @@ t.test(iris$Sepal.Length)$statistic^2
 Note that I can get all of the numbers we've discussed by fitting a model with no predictors at all, and passing that and the intercept-only model to the `anova` function.
 
 ```{r}
+
 iris %>% {anova(lm(Sepal.Length~0, .), 
                 lm(Sepal.Length~1, .))}
 ```
@@ -565,10 +566,14 @@ iris %>% lm(Sepal.Length ~ Species, .) %>% residuals %>% unname
 
 
 ```{r}
+sum((iris %>% lm(Sepal.Length ~ 1 + Species, .) %>% predict)^2)
+sum((iris %>% lm(Sepal.Length ~ 1 + Species, .) %>% residuals)^2)
 iris %>% {anova(lm(Sepal.Length~0, .), 
                 lm(Sepal.Length~1, .),
                 lm(Sepal.Length~1+Species, .))} %>%
   print(digits=6)
+
+(63.21 / 2) / (38.96 / 147)
 ```
 
 Lines for models 1 and 2 have the same Df and SS values. Focus on line 3. We see that in our model with the three categories, the residual SS has decreased from 102.2 to 39.0: The difference in these Residual SS values, 63.2, is what appears in the SS column for model 3.
@@ -618,6 +623,11 @@ Let's permute the species and come up with an idea of the sampling distribution 
 
 
 ```{r}
+iris %>% lm(Sepal.Length~Species, .) %>% anova()
+
+iris %>% lm(Sepal.Length~Species, .) %>% {anova(.)[1,4]} %>% tibble(F=.)
+
+
 iris %>% lm(Sepal.Length~Species, .) %>% 
   {anova(.)["Species", "F value"]} %>%
   tibble(F=.)
@@ -626,8 +636,10 @@ species_F_stat <- . %>% lm(Sepal.Length~Species, .) %>%
   {anova(.)["Species", "F value"]} %>% 
   tibble(F=.)
 
-iris %>% species_F_stat()
+iris %>% species_F_stat() ## observed statistic
+
 iris %>% mutate(Species=sample(Species)) %>% species_F_stat()
+
 iris_species_permute <- rerun(2000, iris %>% mutate(Species=sample(Species)) %>% species_F_stat()) %>% bind_rows()
 
 iris_species_permute
@@ -661,4 +673,23 @@ iris_plot + geom_line(aes(y=predict(with_interactions)))
 
 anova(with_interactions)
 ```
+
+
+#### Permuting residuals
+
+To test if a more complicated model is a significant improvement over a simpler model, our resampling scheme will be the following
+
+- Add a reshuffled version of the residuals from the simpler model to the predictions from the simpler model to create a "new" data set that comes from the simpler model.
+- Fit the more complicated model to the "new" permuted data set. Compute the F statistic for the improvement to model fit.
+- Do the previous step many times to get a estimate of the null distribution. Compare your observed F stat for the real data set to the observed one.
+
+```{r}
+iris %>% mutate(Sepal.Length = predict(parallel_slopes) + residuals(parallel_slopes)) %>% lm(Sepal.Length~Species*Sepal.Width, .) %>% {anova(.)[3,"F value"]} %>% tibble(F=.)
+
+iris %>% mutate(Sepal.Length = predict(parallel_slopes) + sample(residuals(parallel_slopes))) %>% lm(Sepal.Length~Species*Sepal.Width, .) %>% {anova(.)[3,"F value"]} %>% tibble(F=.)
+
+interaction_f_null <- rerun(2000, iris %>% mutate(Sepal.Length = predict(parallel_slopes) + sample(residuals(parallel_slopes))) %>% lm(Sepal.Length~Species*Sepal.Width, .) %>% {anova(.)[3,"F value"]} %>% tibble(F=.)) %>% bind_rows()
+
+```
+
 
